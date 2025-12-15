@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, memo } from 'react'
 import { useSelector, useDispatch } from 'react-redux'
 import PropTypes from 'prop-types'
 
@@ -35,15 +35,16 @@ import PerfectScrollbar from 'react-perfect-scrollbar'
 import MainCard from '@/ui-component/cards/MainCard'
 import Transitions from '@/ui-component/extended/Transitions'
 import { StyledFab } from '@/ui-component/button/StyledFab'
+import AgentflowGeneratorDialog from '@/ui-component/dialog/AgentflowGeneratorDialog'
 
 // icons
-import { IconPlus, IconSearch, IconMinus, IconX } from '@tabler/icons-react'
+import { IconPlus, IconSearch, IconMinus, IconX, IconSparkles } from '@tabler/icons-react'
 import LlamaindexPNG from '@/assets/images/llamaindex.png'
 import LangChainPNG from '@/assets/images/langchain.png'
 import utilNodesPNG from '@/assets/images/utilNodes.png'
 
 // const
-import { baseURL } from '@/store/constant'
+import { baseURL, AGENTFLOW_ICONS } from '@/store/constant'
 import { SET_COMPONENT_NODES } from '@/store/actions'
 
 // ==============================|| ADD NODES||============================== //
@@ -69,7 +70,7 @@ const blacklistForChatflowCanvas = {
     Memory: agentMemoryNodes
 }
 
-const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
+const AddNodes = ({ nodesData, node, isAgentCanvas, isAgentflowv2, onFlowGenerated }) => {
     const theme = useTheme()
     const customization = useSelector((state) => state.customization)
     const dispatch = useDispatch()
@@ -79,6 +80,11 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
     const [open, setOpen] = useState(false)
     const [categoryExpanded, setCategoryExpanded] = useState({})
     const [tabValue, setTabValue] = useState(0)
+
+    const [openDialog, setOpenDialog] = useState(false)
+    const [dialogProps, setDialogProps] = useState({})
+
+    const isAgentCanvasV2 = window.location.pathname.includes('/v2/agentcanvas')
 
     const anchorRef = useRef(null)
     const prevOpen = useRef(open)
@@ -110,17 +116,111 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
         return nodes
     }
 
+    // Fuzzy search utility function that calculates similarity score
+    const fuzzyScore = (searchTerm, text) => {
+        const search = ((searchTerm ?? '') + '').trim().toLowerCase()
+        if (!search) return 0
+        const target = ((text ?? '') + '').toLowerCase()
+
+        let score = 0
+        let searchIndex = 0
+        let firstMatchIndex = -1
+        let lastMatchIndex = -1
+        let consecutiveMatches = 0
+
+        // Check for exact substring match
+        const exactMatchIndex = target.indexOf(search)
+        if (exactMatchIndex !== -1) {
+            score = 1000
+            // Bonus for match at start of string
+            if (exactMatchIndex === 0) {
+                score += 200
+            }
+            // Bonus for match at start of word
+            else if (target[exactMatchIndex - 1] === ' ' || target[exactMatchIndex - 1] === '-' || target[exactMatchIndex - 1] === '_') {
+                score += 100
+            }
+            // Penalty for how far into the string the match is
+            score -= exactMatchIndex * 2
+            // Penalty for length difference (shorter target = better match)
+            score -= (target.length - search.length) * 3
+            return score
+        }
+
+        // Fuzzy matching with character-by-character scoring
+        for (let i = 0; i < target.length && searchIndex < search.length; i++) {
+            if (target[i] === search[searchIndex]) {
+                // Base score for character match
+                score += 10
+
+                // Bonus for consecutive matches
+                if (lastMatchIndex === i - 1) {
+                    consecutiveMatches++
+                    score += 5 + consecutiveMatches * 2 // Increasing bonus for longer sequences
+                } else {
+                    consecutiveMatches = 0
+                }
+
+                // Bonus for match at start of string
+                if (i === 0) {
+                    score += 20
+                }
+
+                // Bonus for match after space or special character (word boundary)
+                if (i > 0 && (target[i - 1] === ' ' || target[i - 1] === '-' || target[i - 1] === '_')) {
+                    score += 15
+                }
+
+                if (firstMatchIndex === -1) firstMatchIndex = i
+                lastMatchIndex = i
+                searchIndex++
+            }
+        }
+
+        // Return 0 if not all characters were matched
+        if (searchIndex < search.length) {
+            return 0
+        }
+
+        // Penalty for length difference (favor shorter targets)
+        score -= Math.max(0, target.length - search.length) * 2
+        // Penalty for gaps between first/last matched span
+        const span = lastMatchIndex - firstMatchIndex + 1
+        const gaps = Math.max(0, span - search.length)
+        score -= gaps * 3
+
+        return score
+    }
+
+    // Score and sort nodes by fuzzy search relevance
+    const scoreAndSortNodes = (nodes, searchValue) => {
+        // Return all nodes unsorted if search is empty
+        if (!searchValue || searchValue.trim() === '') {
+            return nodes
+        }
+
+        // Calculate fuzzy scores for each node
+        const nodesWithScores = nodes.map((nd) => {
+            const nameScore = fuzzyScore(searchValue, nd.name)
+            const labelScore = fuzzyScore(searchValue, nd.label)
+            const categoryScore = fuzzyScore(searchValue, nd.category) * 0.5 // Lower weight for category
+            const maxScore = Math.max(nameScore, labelScore, categoryScore)
+
+            return { node: nd, score: maxScore }
+        })
+
+        // Filter nodes with score > 0 and sort by score (highest first)
+        return nodesWithScores
+            .filter((item) => item.score > 0)
+            .sort((a, b) => b.score - a.score)
+            .map((item) => item.node)
+    }
+
     const getSearchedNodes = (value) => {
         if (isAgentCanvas) {
             const nodes = nodesData.filter((nd) => !blacklistCategoriesForAgentCanvas.includes(nd.category))
             nodes.push(...addException())
-            const passed = nodes.filter((nd) => {
-                const passesName = nd.name.toLowerCase().includes(value.toLowerCase())
-                const passesLabel = nd.label.toLowerCase().includes(value.toLowerCase())
-                const passesCategory = nd.category.toLowerCase().includes(value.toLowerCase())
-                return passesName || passesCategory || passesLabel
-            })
-            return passed
+            return scoreAndSortNodes(nodes, value)
         }
         let nodes = nodesData.filter((nd) => nd.category !== 'Multi Agents' && nd.category !== 'Sequential Agents')
 
@@ -129,13 +229,7 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
             nodes = nodes.filter((nd) => !nodeNames.includes(nd.name))
         }
 
-        const passed = nodes.filter((nd) => {
-            const passesName = nd.name.toLowerCase().includes(value.toLowerCase())
-            const passesLabel = nd.label.toLowerCase().includes(value.toLowerCase())
-            const passesCategory = nd.category.toLowerCase().includes(value.toLowerCase())
-            return passesName || passesCategory || passesLabel
-        })
-        return passed
+        return scoreAndSortNodes(nodes, value)
     }
 
     const filterSearch = (value, newTabValue) => {
@@ -177,6 +271,15 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
 
             const filteredResult = {}
             for (const category in result) {
+                if (isAgentCanvasV2) {
+                    if (category !== 'Agent Flows') {
+                        continue
+                    }
+                } else {
+                    if (category === 'Agent Flows') {
+                        continue
+                    }
+                }
                 // Filter out blacklisted categories
                 if (!blacklistCategoriesForAgentCanvas.includes(category)) {
                     // Filter out LlamaIndex nodes
@@ -195,6 +298,7 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
             accordianCategories['Multi Agents'] = true
             accordianCategories['Sequential Agents'] = true
             accordianCategories['Memory'] = true
+            accordianCategories['Agent Flows'] = true
             setCategoryExpanded(accordianCategories)
         } else {
             const taggedNodes = groupByTags(nodes, newTabValue)
@@ -208,7 +312,7 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
 
             const filteredResult = {}
             for (const category in result) {
-                if (category === 'Multi Agents' || category === 'Sequential Agents') {
+                if (category === 'Agent Flows' || category === 'Multi Agents' || category === 'Sequential Agents') {
                     continue
                 }
                 if (Object.keys(blacklistForChatflowCanvas).includes(category)) {
@@ -255,6 +359,13 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
         }
     }
 
+    const renderIcon = (node) => {
+        const foundIcon = AGENTFLOW_ICONS.find((icon) => icon.name === node.name)
+
+        if (!foundIcon) return null
+        return <foundIcon.icon size={30} color={node.color} />
+    }
+
     useEffect(() => {
         if (prevOpen.current === true && open === false) {
             anchorRef.current.focus()
@@ -276,6 +387,25 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [nodesData, dispatch])
 
+    // Handle dialog open/close
+    const handleOpenDialog = () => {
+        setOpenDialog(true)
+        setDialogProps({
+            title: 'What would you like to build?',
+            description:
+                'Enter your prompt to generate an agentflow. Performance may vary with different models. Only nodes and edges are generated, you will need to fill in the input fields for each node.'
+        })
+    }
+
+    const handleCloseDialog = () => {
+        setOpenDialog(false)
+    }
+
+    const handleConfirmDialog = () => {
+        setOpenDialog(false)
+        onFlowGenerated()
+    }
+
     return (
         <>
             <StyledFab
@@ -289,6 +419,33 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
             >
                 {open ? <IconMinus /> : <IconPlus />}
             </StyledFab>
+            {isAgentflowv2 && (
+                <StyledFab
+                    sx={{
+                        left: 40,
+                        top: 20,
+                        background: 'linear-gradient(45deg, #FF6B6B 30%, #FF8E53 90%)',
+                        '&:hover': {
+                            background: 'linear-gradient(45deg, #FF8E53 30%, #FF6B6B 90%)'
+                        }
+                    }}
+                    onClick={handleOpenDialog}
+                    size='small'
+                    color='primary'
+                    aria-label='generate'
+                    title='Generate Agentflow'
+                >
+                    <IconSparkles />
+                </StyledFab>
+            )}
+
+            <AgentflowGeneratorDialog
+                show={openDialog}
+                dialogProps={dialogProps}
+                onCancel={handleCloseDialog}
+                onConfirm={handleConfirmDialog}
+            />
+
             <Popper
                 placement='bottom-end'
                 open={open}
@@ -489,27 +646,43 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
                                                                             }}
                                                                         >
                                                                             <ListItem alignItems='center'>
-                                                                                <ListItemAvatar>
-                                                                                    <div
-                                                                                        style={{
-                                                                                            width: 50,
-                                                                                            height: 50,
-                                                                                            borderRadius: '50%',
-                                                                                            backgroundColor: 'white'
-                                                                                        }}
-                                                                                    >
-                                                                                        <img
+                                                                                {node.color && !node.icon ? (
+                                                                                    <ListItemAvatar>
+                                                                                        <div
                                                                                             style={{
-                                                                                                width: '100%',
-                                                                                                height: '100%',
-                                                                                                padding: 10,
-                                                                                                objectFit: 'contain'
+                                                                                                width: 50,
+                                                                                                height: 'auto',
+                                                                                                display: 'flex',
+                                                                                                alignItems: 'center',
+                                                                                                justifyContent: 'center'
                                                                                             }}
-                                                                                            alt={node.name}
-                                                                                            src={`${baseURL}/api/v1/node-icon/${node.name}`}
-                                                                                        />
-                                                                                    </div>
-                                                                                </ListItemAvatar>
+                                                                                        >
+                                                                                            {renderIcon(node)}
+                                                                                        </div>
+                                                                                    </ListItemAvatar>
+                                                                                ) : (
+                                                                                    <ListItemAvatar>
+                                                                                        <div
+                                                                                            style={{
+                                                                                                width: 50,
+                                                                                                height: 50,
+                                                                                                borderRadius: '50%',
+                                                                                                backgroundColor: 'white'
+                                                                                            }}
+                                                                                        >
+                                                                                            <img
+                                                                                                style={{
+                                                                                                    width: '100%',
+                                                                                                    height: '100%',
+                                                                                                    padding: 10,
+                                                                                                    objectFit: 'contain'
+                                                                                                }}
+                                                                                                alt={node.name}
+                                                                                                src={`${baseURL}/api/v1/node-icon/${node.name}`}
+                                                                                            />
+                                                                                        </div>
+                                                                                    </ListItemAvatar>
+                                                                                )}
                                                                                 <ListItemText
                                                                                     sx={{ ml: 1 }}
                                                                                     primary={
@@ -583,7 +756,9 @@ const AddNodes = ({ nodesData, node, isAgentCanvas }) => {
 AddNodes.propTypes = {
     nodesData: PropTypes.array,
     node: PropTypes.object,
-    isAgentCanvas: PropTypes.bool
+    onFlowGenerated: PropTypes.func,
+    isAgentCanvas: PropTypes.bool,
+    isAgentflowv2: PropTypes.bool
 }
 
-export default AddNodes
+export default memo(AddNodes)

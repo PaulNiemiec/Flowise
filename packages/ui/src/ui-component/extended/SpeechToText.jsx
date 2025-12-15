@@ -6,6 +6,7 @@ import { enqueueSnackbar as enqueueSnackbarAction, closeSnackbar as closeSnackba
 // material-ui
 import { Typography, Box, Button, FormControl, ListItem, ListItemAvatar, ListItemText, MenuItem, Select } from '@mui/material'
 import { IconX } from '@tabler/icons-react'
+import { useTheme } from '@mui/material/styles'
 
 // Project import
 import CredentialInputHandler from '@/views/canvas/CredentialInputHandler'
@@ -238,10 +239,11 @@ const speechToTextProviders = {
     }
 }
 
-const SpeechToText = ({ dialogProps }) => {
+const SpeechToText = ({ dialogProps, onConfirm }) => {
     const dispatch = useDispatch()
 
     useNotifier()
+    const theme = useTheme()
 
     const enqueueSnackbar = (...args) => dispatch(enqueueSnackbarAction(...args))
     const closeSnackbar = (...args) => dispatch(closeSnackbarAction(...args))
@@ -269,6 +271,7 @@ const SpeechToText = ({ dialogProps }) => {
                     }
                 })
                 dispatch({ type: SET_CHATFLOW, chatflow: saveResp.data })
+                onConfirm?.()
             }
         } catch (error) {
             enqueueSnackbar({
@@ -349,7 +352,16 @@ const SpeechToText = ({ dialogProps }) => {
             <Box fullWidth sx={{ mb: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
                 <Typography>Providers</Typography>
                 <FormControl fullWidth>
-                    <Select size='small' value={selectedProvider} onChange={handleProviderChange}>
+                    <Select
+                        size='small'
+                        value={selectedProvider}
+                        onChange={handleProviderChange}
+                        sx={{
+                            '& .MuiSvgIcon-root': {
+                                color: theme?.customization?.isDarkMode ? '#fff' : 'inherit'
+                            }
+                        }}
+                    >
                         <MenuItem value='none'>None</MenuItem>
                         {Object.values(speechToTextProviders).map((provider) => (
                             <MenuItem key={provider.name} value={provider.name}>
@@ -368,7 +380,11 @@ const SpeechToText = ({ dialogProps }) => {
                                     width: 50,
                                     height: 50,
                                     borderRadius: '50%',
-                                    backgroundColor: 'white'
+                                    backgroundColor: 'white',
+                                    flexShrink: 0,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center'
                                 }}
                             >
                                 <img
@@ -387,7 +403,15 @@ const SpeechToText = ({ dialogProps }) => {
                             sx={{ ml: 1 }}
                             primary={speechToTextProviders[selectedProvider].label}
                             secondary={
-                                <a target='_blank' rel='noreferrer' href={speechToTextProviders[selectedProvider].url}>
+                                <a
+                                    target='_blank'
+                                    rel='noreferrer'
+                                    href={speechToTextProviders[selectedProvider].url}
+                                    style={{
+                                        color: theme?.customization?.isDarkMode ? '#90caf9' : '#1976d2',
+                                        textDecoration: 'underline'
+                                    }}
+                                >
                                     {speechToTextProviders[selectedProvider].url}
                                 </a>
                             }
@@ -467,7 +491,8 @@ const SpeechToText = ({ dialogProps }) => {
 }
 
 SpeechToText.propTypes = {
-    dialogProps: PropTypes.object
+    dialogProps: PropTypes.object,
+    onConfirm: PropTypes.func
 }
 
 export default SpeechToText
